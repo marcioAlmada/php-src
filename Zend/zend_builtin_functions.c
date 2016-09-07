@@ -20,6 +20,7 @@
 /* $Id$ */
 
 #include "zend.h"
+#include "php.h"
 #include "zend_API.h"
 #include "zend_builtin_functions.h"
 #include "zend_constants.h"
@@ -382,7 +383,104 @@ static const zend_function_entry builtin_functions[] = { /* {{{ */
 };
 /* }}} */
 
+zend_class_entry *stdim_ce;
+
+#define ZEND_STDIM_OPEN 	0
+#define ZEND_STDIM_CLOSED 	1
+
+typedef struct _stdim_object {
+    zend_long lock;
+    zend_object zo;
+} stdim_object;
+
+static inline stdim_object *stdim_fetch_object(zend_object *object)
+{
+	return (stdim_object *)((char *)object - offsetof(stdim_object, zo));
+}
+
+#define STDIM_FETCH_OBJ(zval) STDIM_FETCH_ZOBJ(Z_OBJ_P(zval))
+#define STDIM_FETCH_ZOBJ(zobj) stdim_fetch_object(zobj)
+
+void stdim_free_object(zend_object *object)
+{
+	zend_object_std_dtor(object);
+}
+
+static void stdim_write_property(zval *object, zval *member, zval *value, void **cache_slot) /* {{{ */
+{
+	stdim_object *intern = STDIM_FETCH_OBJ(object);
+
+	if (ZEND_STDIM_CLOSED == intern->lock) {
+		zend_throw_exception(zend_ce_exception, "Attempt to modify property from immutable class", 0);
+	}
+
+	zend_get_std_object_handlers()->write_property(object, member, value, cache_slot);
+}
+
+static zval *stdim_read_property_by_ref(zval *object, zval *member, int type, void **cache_slot)
+{
+	zend_throw_exception(zend_ce_exception, "Attempt to get property by reference from immutable class", 0);
+
+	return NULL;
+}
+
+static void stdim_unset_property(zval *object, zval *member, void **cache_slot) /* {{{ */
+{
+	zend_throw_exception(zend_ce_exception, "Attempt to unset property from immutable class", 0);
+}
+
+static zend_object_handlers stdim_object_handlers;
+
+zend_object *stdim_create_object_handler(zend_class_entry *ce TSRMLS_DC)
+{
+    stdim_object *intern = ecalloc(1, sizeof(stdim_object) + zend_object_properties_size(ce));
+
+    intern->lock = ZEND_STDIM_OPEN;
+
+    zend_object_std_init(&intern->zo, ce);
+    object_properties_init(&intern->zo, ce);
+
+    intern->zo.handlers = &stdim_object_handlers;
+
+    return &intern->zo;
+}
+
+PHP_METHOD(stdClassImmutable, lock) /* {{{ */
+{
+    stdim_object *intern = STDIM_FETCH_OBJ(getThis());
+
+	intern->lock = ZEND_STDIM_CLOSED;
+}
+
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_stdim_empty, 1, 0, 0)
+	ZEND_ARG_INFO(0, properties)
+ZEND_END_ARG_INFO()
+
+const zend_function_entry stdim_functions[] = {
+	PHP_ME(stdClassImmutable, lock, arginfo_stdim_empty, ZEND_ACC_PUBLIC)
+    PHP_FE_END
+};
+
 ZEND_MINIT_FUNCTION(core) { /* {{{ */
+
+    zend_class_entry tmp_ce;
+
+    INIT_CLASS_ENTRY(tmp_ce, "stdClassImmutable", stdim_functions);
+
+    stdim_ce = zend_register_internal_class(&tmp_ce);
+    stdim_ce->create_object = stdim_create_object_handler;
+
+	memcpy(&stdim_object_handlers, zend_get_std_object_handlers(), sizeof(stdim_object_handlers));
+
+	stdim_object_handlers.write_property = stdim_write_property;
+	stdim_object_handlers.unset_property = stdim_unset_property;
+	stdim_object_handlers.get_property_ptr_ptr = stdim_read_property_by_ref;
+	stdim_object_handlers.free_obj = stdim_free_object;
+	stdim_object_handlers.offset = offsetof(stdim_object, zo);
+
+////////////////////////////////////////////////////////////////////////////////
+
 	zend_class_entry class_entry;
 
 	INIT_CLASS_ENTRY(class_entry, "stdClass", NULL);
