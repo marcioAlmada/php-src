@@ -116,6 +116,7 @@ static PHP_MINIT_FUNCTION(json)
 	/* options for json_decode */
 	PHP_JSON_REGISTER_CONSTANT("JSON_OBJECT_AS_ARRAY", PHP_JSON_OBJECT_AS_ARRAY);
 	PHP_JSON_REGISTER_CONSTANT("JSON_BIGINT_AS_STRING", PHP_JSON_BIGINT_AS_STRING);
+	PHP_JSON_REGISTER_CONSTANT("JSON_STRICT", PHP_JSON_STRICT);
 
 	/* common options for json_decode and json_encode */
 	PHP_JSON_REGISTER_CONSTANT("JSON_INVALID_UTF8_IGNORE", PHP_JSON_INVALID_UTF8_IGNORE);
@@ -210,6 +211,7 @@ PHP_JSON_API int php_json_encode(smart_str *buf, zval *val, int options) /* {{{ 
 {
 	return php_json_encode_ex(buf, val, options, JSON_G(encode_max_depth));
 }
+
 /* }}} */
 
 static const char *php_json_get_error_msg(php_json_error_code error_code) /* {{{ */
@@ -243,21 +245,40 @@ static const char *php_json_get_error_msg(php_json_error_code error_code) /* {{{
 }
 /* }}} */
 
+static void php_json_on_error(php_json_error_code error_code, zend_long options) /* {{{ */
+{
+	if (!(options & PHP_JSON_THROW_ON_ERROR)) {
+		JSON_G(error_code) = error_code;
+	} else {
+		zend_throw_exception(php_json_exception_ce, php_json_get_error_msg(error_code), error_code);
+	}
+}
+/* }}} */
+
 PHP_JSON_API int php_json_decode_ex(zval *return_value, char *str, size_t str_len, zend_long options, zend_long depth) /* {{{ */
 {
 	php_json_parser parser;
 
 	php_json_parser_init(&parser, return_value, str, str_len, (int)options, (int)depth);
 
+	php_json_error_code error_code;
+
 	if (php_json_yyparse(&parser)) {
-		php_json_error_code error_code = php_json_parser_error_code(&parser);
-		if (!(options & PHP_JSON_THROW_ON_ERROR)) {
-			JSON_G(error_code) = error_code;
-		} else {
-			zend_throw_exception(php_json_exception_ce, php_json_get_error_msg(error_code), error_code);
-		}
+		error_code = php_json_parser_error_code(&parser);
+		php_json_on_error(error_code, options);
 		RETVAL_NULL();
 		return FAILURE;
+	}
+	else {
+		if (options & PHP_JSON_STRICT) {
+			int zval_type = Z_TYPE_P(return_value);
+			if (zval_type != IS_OBJECT && zval_type != IS_ARRAY) {
+				error_code = PHP_JSON_ERROR_SYNTAX;
+				php_json_on_error(error_code, options);
+				zval_ptr_dtor(return_value);
+				return FAILURE;
+			}
+		}
 	}
 
 	return SUCCESS;

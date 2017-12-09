@@ -56,6 +56,7 @@ typedef enum {
 /* json_decode() options */
 #define PHP_JSON_OBJECT_AS_ARRAY            (1<<0)
 #define PHP_JSON_BIGINT_AS_STRING           (1<<1)
+#define PHP_JSON_STRICT                     (1<<2)
 
 /* json_encode() options */
 #define PHP_JSON_HEX_TAG                    (1<<0)
